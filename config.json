@@ -18,7 +18,7 @@
   "// URL categorization patterns": "Each pattern is a regex checked against the URL path. Order matters; the first match wins.",
   "urlPatterns": [
     { "category": "product",          "pattern": "/product/" },
-    { "category": "product-category", "pattern": "/product-category/" },
+    { "category": "product-category", "pattern": "/category/" },
     { "category": "cart",             "pattern": "/cart" },
     { "category": "checkout",         "pattern": "/checkout" },
     { "category": "my-account",       "pattern": "/my-account" },
