@@ -1,0 +1,24 @@
+# Dependencies — always reinstalled via "npm install", never committed
+node_modules/
+
+# Generated audit output (timestamped HTML/JSON reports).
+# These are results, not source code — regenerated every run.
+# Remove this line if you'd rather keep a history of past reports in git.
+reports/
+
+# npm logs and debug files
+npm-debug.log*
+*.log
+
+# OS-specific junk files
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editor/IDE folders
+.vscode/
+.idea/
+
+# Environment variable files, in case any are added later (API keys, secrets, etc.)
+.env
+.env.local

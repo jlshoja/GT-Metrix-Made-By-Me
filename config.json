@@ -1,0 +1,57 @@
+{
+  "// guide": "You can edit this file without touching the main code",
+
+  "baseUrl": "https://luxbaz.com",
+
+  "// sitemap location": "Change this if your sitemap URL is different",
+  "sitemapUrl": "https://luxbaz.com/sitemap_index.xml",
+
+  "// number of sample pages tested per category (e.g. how many product pages get actually tested)": "",
+  "samplesPerCategory": {
+    "product": 3,
+    "product-category": 3,
+    "blog": 2,
+    "page": 5,
+    "other": 3
+  },
+
+  "// URL categorization patterns": "Each pattern is a regex checked against the URL path. Order matters; the first match wins.",
+  "urlPatterns": [
+    { "category": "product",          "pattern": "/product/" },
+    { "category": "product-category", "pattern": "/product-category/" },
+    { "category": "cart",             "pattern": "/cart" },
+    { "category": "checkout",         "pattern": "/checkout" },
+    { "category": "my-account",       "pattern": "/my-account" },
+    { "category": "blog",             "pattern": "/blog/" },
+    { "category": "search",           "pattern": "[?&]s=" }
+  ],
+
+  "// always test these pages no matter what, even if sampling would skip them": "",
+  "alwaysInclude": [
+    "https://luxbaz.com/"
+  ],
+
+  "// number of concurrent tests (higher = faster, but more load on your server and machine)": "",
+  "concurrency": 1,
+
+  "// device type to test": "mobile or desktop",
+  "formFactor": "mobile",
+
+  "// delay (ms) between starting each test, to reduce load on the server": "",
+  "delayBetweenTestsMs": 1500,
+
+  "// output folder": "",
+  "outputDir": "./reports",
+
+  "// how long (ms) to wait for each sitemap file to respond before giving up": "",
+  "sitemapTimeoutMs": 15000,
+
+  "// how many times to retry fetching a sitemap file if it times out or errors": "",
+  "sitemapRetries": 3,
+
+  "// how long (ms) to wait for a single Lighthouse test before giving up on that page": "",
+  "lighthouseTimeoutMs": 90000,
+
+  "// how many times to retry a Lighthouse test on a page if it fails or times out": "",
+  "lighthouseRetries": 1
+}

@@ -1,0 +1,14 @@
+{
+  "name": "luxbaz-speed-audit",
+  "version": "1.0.0",
+  "description": "DIY GTmetrix-style speed/performance audit tool for luxbaz.com",
+  "type": "commonjs",
+  "main": "seo-speed-audit.js",
+  "scripts": {
+    "audit": "node seo-speed-audit.js"
+  },
+  "dependencies": {
+    "lighthouse": "^12.2.1",
+    "chrome-launcher": "^1.1.2"
+  }
+}
