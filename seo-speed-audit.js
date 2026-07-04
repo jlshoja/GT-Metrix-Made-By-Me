@@ -100,10 +100,23 @@ async function getAllUrlsFromSitemap(sitemapUrl, config, seen = new Set()) {
     return all;
   }
 
-  return locs;
+  // Tag each URL with the actual leaf sitemap file it came from (e.g. "page-sitemap.xml").
+  // This lets us categorize pages that have no distinguishing pattern in their URL itself
+  // (like WordPress static pages) based on which sitemap listed them.
+  return locs.map((url) => ({ url, sourceSitemap: sitemapUrl }));
 }
 
-function categorizeUrl(url, patterns) {
+// Given a sitemap file URL like ".../page-sitemap.xml" or ".../product_cat-sitemap.xml",
+// derive a short category name from its filename: "page", "product-cat", etc.
+// Returns null if the filename doesn't look like a recognizable "<name>-sitemap[N].xml" pattern.
+function categoryFromSitemapFilename(sitemapUrl) {
+  const file = sitemapUrl.split("/").pop() || "";
+  const match = file.match(/^(.*?)[-_]sitemap\d*\.xml$/i);
+  if (!match) return null;
+  return match[1].replace(/_/g, "-").toLowerCase();
+}
+
+function categorizeUrl(url, patterns, fallbackCategory) {
   for (const { category, pattern } of patterns) {
     try {
       const re = new RegExp(pattern, "i");
@@ -112,13 +125,14 @@ function categorizeUrl(url, patterns) {
       // Invalid pattern, skip it
     }
   }
-  return "other";
+  return fallbackCategory || "other";
 }
 
-function groupAndSample(urls, config) {
+function groupAndSample(urlEntries, config) {
   const groups = {};
-  for (const url of urls) {
-    const cat = categorizeUrl(url, config.urlPatterns);
+  for (const { url, sourceSitemap } of urlEntries) {
+    const fallback = sourceSitemap ? categoryFromSitemapFilename(sourceSitemap) : null;
+    const cat = categorizeUrl(url, config.urlPatterns, fallback);
     if (!groups[cat]) groups[cat] = [];
     groups[cat].push(url);
   }
@@ -415,7 +429,12 @@ async function main() {
   const config = loadConfig();
 
   console.log(`\n== Step 1: Reading sitemap from ${config.sitemapUrl} ==`);
-  const allUrls = [...new Set(await getAllUrlsFromSitemap(config.sitemapUrl, config))];
+  const urlEntries = await getAllUrlsFromSitemap(config.sitemapUrl, config);
+  const seenUrls = new Map(); // url -> sourceSitemap (first one wins if a URL appears twice)
+  for (const { url, sourceSitemap } of urlEntries) {
+    if (!seenUrls.has(url)) seenUrls.set(url, sourceSitemap);
+  }
+  const allUrls = [...seenUrls.keys()];
   console.log(`Total URLs found: ${allUrls.length}`);
 
   if (allUrls.length === 0) {
@@ -424,7 +443,10 @@ async function main() {
   }
 
   console.log("\n== Step 2: Categorizing and sampling ==");
-  const { selected, meta, groups } = groupAndSample(allUrls, config);
+  const { selected, meta, groups } = groupAndSample(
+    allUrls.map((url) => ({ url, sourceSitemap: seenUrls.get(url) })),
+    config
+  );
   for (const [cat, list] of Object.entries(groups)) {
     const sampleSize = config.samplesPerCategory[cat] ?? config.samplesPerCategory.other ?? 2;
     console.log(`  Category "${cat}": ${list.length} pages found → testing ${Math.min(sampleSize, list.length)} sample(s)`);
