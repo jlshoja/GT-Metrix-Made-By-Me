@@ -27,12 +27,16 @@ function loadConfig() {
 
 // Fetches a URL as text. `timeoutMs` aborts the request if the server never responds
 // (default 15s, can be overridden via config.sitemapTimeoutMs).
-function fetchUrl(url, timeoutMs = 15000) {
+// `maxRedirects` prevents infinite redirect loops (default 5, configurable via config.maxRedirects).
+function fetchUrl(url, timeoutMs = 15000, redirectCount = 0, maxRedirects = 5) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith("https") ? https : http;
     const req = client.get(url, { headers: { "User-Agent": "Mozilla/5.0 (LuxbazSpeedAudit/1.0)" } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return fetchUrl(res.headers.location, timeoutMs).then(resolve, reject);
+        if (redirectCount >= maxRedirects) {
+          return reject(new Error(`Too many redirects (${maxRedirects}) for ${url}`));
+        }
+        return fetchUrl(res.headers.location, timeoutMs, redirectCount + 1, maxRedirects).then(resolve, reject);
       }
       let data = "";
       res.on("data", (chunk) => (data += chunk));
@@ -50,11 +54,11 @@ function fetchUrl(url, timeoutMs = 15000) {
 // Retries fetchUrl a configurable number of times before giving up, with a short
 // pause between attempts. Used for sitemap files, which occasionally time out
 // or hiccup on a slow/loaded server.
-async function fetchUrlWithRetry(url, timeoutMs, retries) {
+async function fetchUrlWithRetry(url, timeoutMs, retries, maxRedirects = 5) {
   let lastErr;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      return await fetchUrl(url, timeoutMs);
+      return await fetchUrl(url, timeoutMs, 0, maxRedirects);
     } catch (err) {
       lastErr = err;
       console.warn(`  ⚠ Attempt ${attempt}/${retries} failed for ${url}: ${err.message}`);
@@ -76,11 +80,12 @@ async function getAllUrlsFromSitemap(sitemapUrl, config, seen = new Set()) {
 
   const timeoutMs = config.sitemapTimeoutMs ?? 15000;
   const retries = config.sitemapRetries ?? 3;
+  const maxRedirects = config.maxRedirects ?? 5;
 
   console.log(`  Reading: ${sitemapUrl}`);
   let xml;
   try {
-    xml = await fetchUrlWithRetry(sitemapUrl, timeoutMs, retries);
+    xml = await fetchUrlWithRetry(sitemapUrl, timeoutMs, retries, maxRedirects);
   } catch (err) {
     console.warn(`  ⚠ Could not fetch after ${retries} attempt(s): ${sitemapUrl} (${err.message})`);
     return [];
@@ -163,10 +168,14 @@ function groupAndSample(urlEntries, config) {
 // ---------- Running Lighthouse ----------
 
 async function runLighthouseOnUrl(url, config, chrome) {
+  const categories = config.auditMode === "full"
+    ? ["performance", "seo", "accessibility", "best-practices"]
+    : ["performance"];
+
   const options = {
     port: chrome.port,
     output: "json",
-    onlyCategories: ["performance"],
+    onlyCategories: categories,
     formFactor: config.formFactor || "mobile",
     screenEmulation:
       (config.formFactor || "mobile") === "mobile"
@@ -218,7 +227,7 @@ async function runLighthouseOnUrl(url, config, chrome) {
     .slice(0, 8)
     .map((a) => ({ title: a.title, description: a.description }));
 
-  return {
+  const result = {
     url,
     score,
     metrics: {
@@ -238,6 +247,18 @@ async function runLighthouseOnUrl(url, config, chrome) {
     opportunities,
     diagnostics,
   };
+
+  // Include full audit scores when running in full mode
+  if (config.auditMode === "full") {
+    const catScore = (id) => lhr.categories[id] ? Math.round(lhr.categories[id].score * 100) : null;
+    result.categoryScores = {
+      seo: catScore("seo"),
+      accessibility: catScore("accessibility"),
+      "best-practices": catScore("best-practices"),
+    };
+  }
+
+  return result;
 }
 
 function sleep(ms) {
@@ -280,21 +301,36 @@ function escapeHtml(str) {
 }
 
 function buildHtmlReport(results, meta, config) {
+  const isFullMode = config.auditMode === "full";
+
+  const extraCols = isFullMode ? ["SEO", "A11y", "BP"] : [];
+  const extraColCount = extraCols.length;
+  const totalCols = 8 + extraColCount;
+
+  const extraHeaders = extraCols.map((label) => `<th>${label}</th>`).join("");
+
   const rows = results
     .map((r, idx) => {
       const m = meta[idx];
       if (r.error) {
         return `<tr class="err">
           <td>${escapeHtml(r.url)}</td>
-          <td colspan="6">Test failed: ${escapeHtml(r.error)}</td>
+          <td colspan="${totalCols - 1}">Test failed: ${escapeHtml(r.error)}</td>
         </tr>`;
       }
       const sizeKb = r.pageSizeBytes ? Math.round(r.pageSizeBytes / 1024) : "—";
+      const extraCells = isFullMode && r.categoryScores
+        ? ["seo", "accessibility", "best-practices"].map((key) => {
+            const s = r.categoryScores[key];
+            return s !== null ? `<td><span class="score-pill" style="background:${scoreColor(s)}">${s}</span></td>` : "<td>—</td>";
+          }).join("")
+        : "";
       return `<tr>
         <td class="url-cell"><a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a>
           <div class="cat-badge">${escapeHtml(m.category)} ${m.totalInCategory > 1 ? `(representing ${m.totalInCategory} pages)` : ""}</div>
         </td>
         <td><span class="score-pill" style="background:${scoreColor(r.score)}">${r.score}</span></td>
+        ${extraCells}
         <td>${r.metrics.lcp}</td>
         <td>${r.metrics.cls}</td>
         <td>${r.metrics.tbt}</td>
@@ -326,11 +362,16 @@ function buildHtmlReport(results, meta, config) {
         )
         .join("");
 
+      const categoryScoresBlock = isFullMode && r.categoryScores
+        ? `<p class="cat-badge">SEO: ${r.categoryScores.seo ?? "—"} &nbsp;|&nbsp; Accessibility: ${r.categoryScores.accessibility ?? "—"} &nbsp;|&nbsp; Best Practices: ${r.categoryScores["best-practices"] ?? "—"}</p>`
+        : "";
+
       return `<div class="detail-card">
         <h3><a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a>
           <span class="score-pill" style="background:${scoreColor(r.score)}">${r.score}</span>
         </h3>
         <p class="cat-badge">Category: ${escapeHtml(m.category)}</p>
+        ${categoryScoresBlock}
         ${opps ? `<h4>Speed improvement opportunities</h4><ul>${opps}</ul>` : ""}
         ${diags ? `<h4>Other technical issues</h4><ul>${diags}</ul>` : ""}
         ${!opps && !diags ? "<p>No significant issues detected 👍</p>" : ""}
@@ -342,12 +383,13 @@ function buildHtmlReport(results, meta, config) {
   const chartScores = JSON.stringify(results.map((r) => (r.error ? 0 : r.score)));
 
   const generatedAt = new Date().toLocaleString("en-US");
+  const reportTitle = isFullMode ? "Full Site Audit Report" : "Speed & Performance Report";
 
   return `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>
 <meta charset="UTF-8">
-<title>luxbaz.com Speed Report</title>
+<title>luxbaz.com ${reportTitle}</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
   body { font-family: Tahoma, Arial, sans-serif; background:#f5f6f8; margin:0; padding:24px; color:#222; }
@@ -371,11 +413,12 @@ function buildHtmlReport(results, meta, config) {
 </style>
 </head>
 <body>
-  <h1>luxbaz.com Speed & Performance Report</h1>
+  <h1>luxbaz.com ${reportTitle}</h1>
   <div class="meta">
     Report generated: ${generatedAt} &nbsp;|&nbsp;
     Pages tested: ${results.length} &nbsp;|&nbsp;
-    Device: ${config.formFactor === "desktop" ? "Desktop" : "Mobile"}
+    Device: ${config.formFactor === "desktop" ? "Desktop" : "Mobile"} &nbsp;|&nbsp;
+    Mode: ${isFullMode ? "Full (Perf + SEO + A11y + BP)" : "Light (Performance only)"}
   </div>
 
   <div class="chart-wrap">
@@ -386,7 +429,7 @@ function buildHtmlReport(results, meta, config) {
   <table>
     <thead>
       <tr>
-        <th>Page</th><th>Score</th><th>LCP</th><th>CLS</th><th>TBT</th><th>Speed Index</th><th>Size</th><th># Requests</th>
+        <th>Page</th><th>Perf</th>${extraHeaders}<th>LCP</th><th>CLS</th><th>TBT</th><th>Speed Index</th><th>Size</th><th># Requests</th>
       </tr>
     </thead>
     <tbody>
@@ -422,11 +465,33 @@ function buildHtmlReport(results, meta, config) {
 // ---------- Main execution ----------
 
 async function main() {
+  // Parse CLI flags
+  const args = process.argv.slice(2);
+  const singleUrlIdx = args.indexOf("--url");
+  const singleUrl = singleUrlIdx !== -1 && args[singleUrlIdx + 1] ? args[singleUrlIdx + 1] : null;
+
   console.log("Loading Lighthouse modules...");
-  lighthouse = (await import("lighthouse")).default;
-  chromeLauncher = await import("chrome-launcher");
+  try {
+    lighthouse = (await import("lighthouse")).default;
+    chromeLauncher = await import("chrome-launcher");
+  } catch (err) {
+    console.error(`Failed to load Lighthouse. Did you run "npm install"? ${err.message}`);
+    process.exit(1);
+  }
 
   const config = loadConfig();
+
+  if (singleUrl) {
+    console.log(`\n== Single URL mode: ${singleUrl} ==`);
+    const chrome = await chromeLauncher.launch({
+      chromeFlags: ["--headless=new", "--no-sandbox", "--disable-gpu"],
+    });
+    const result = await runLighthouseOnUrl(singleUrl, config, chrome);
+    console.log(`  ✓ Score: ${result.score}`);
+    try { await chrome.kill(); } catch (e) { /* ignore */ }
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
 
   console.log(`\n== Step 1: Reading sitemap from ${config.sitemapUrl} ==`);
   const urlEntries = await getAllUrlsFromSitemap(config.sitemapUrl, config);
@@ -460,12 +525,17 @@ async function main() {
 
   const tasks = meta.map((m) => m);
   let completed = 0;
+  const auditStartTime = Date.now();
 
   const lighthouseRetries = config.lighthouseRetries ?? 1;
 
   const results = await runWithConcurrency(tasks, config.concurrency || 2, async (item) => {
     if (config.delayBetweenTestsMs) await sleep(config.delayBetweenTestsMs);
-    console.log(`  Testing (${++completed}/${tasks.length}): ${item.url}`);
+    const elapsed = (Date.now() - auditStartTime) / 1000;
+    const avgPerTask = elapsed / (completed || 1);
+    const remaining = Math.round(avgPerTask * (tasks.length - completed));
+    const eta = remaining > 60 ? `${Math.round(remaining / 60)}m ${remaining % 60}s` : `${remaining}s`;
+    console.log(`  Testing (${++completed}/${tasks.length}, ~${eta} left): ${item.url}`);
 
     // Try once, then retry up to `lighthouseRetries` more times on failure
     // (a fresh attempt often succeeds if the previous failure was transient).

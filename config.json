@@ -31,6 +31,9 @@
     "https://luxbaz.com/"
   ],
 
+  "// audit mode": "'light' (only performance) or 'full' (performance + seo + accessibility + best-practices)",
+  "auditMode": "light",
+
   "// number of concurrent tests (higher = faster, but more load on your server and machine)": "",
   "concurrency": 1,
 
@@ -53,5 +56,11 @@
   "lighthouseTimeoutMs": 90000,
 
   "// how many times to retry a Lighthouse test on a page if it fails or times out": "",
-  "lighthouseRetries": 1
+  "lighthouseRetries": 1,
+
+  "// max redirects to follow when fetching sitemaps (safety against infinite loops)": "",
+  "maxRedirects": 5,
+
+  "// max number of (slowest) requests shown in each page's waterfall chart in the report": "",
+  "waterfallMaxRequests": 40
 }
