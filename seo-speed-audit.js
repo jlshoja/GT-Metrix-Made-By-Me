@@ -17,6 +17,15 @@ const http = require("http");
 
 let lighthouse, chromeLauncher;
 
+// ---------- CLI argument parsing ----------
+const args = process.argv.slice(2);
+const singleUrlArg = args.find(a => a.startsWith("--url=")) || args.find(a => a.startsWith("-u="));
+const singleUrl = singleUrlArg ? singleUrlArg.split("=")[1] : null;
+const auditModeArg = args.find(a => a.startsWith("--mode=")) || args.find(a => a.startsWith("-m="));
+const cliAuditMode = auditModeArg ? auditModeArg.split("=")[1] : null;
+const formFactorArg = args.find(a => a.startsWith("--device=")) || args.find(a => a.startsWith("-d="));
+const cliFormFactor = formFactorArg ? formFactorArg.split("=")[1] : null;
+
 // ---------- Helper utilities ----------
 
 function loadConfig() {
@@ -300,6 +309,21 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+// Loads the Chart.js UMD bundle from node_modules so it can be embedded directly
+// into the report as inline <script> content. This makes the report fully
+// self-contained and viewable offline / behind restrictive firewalls, instead
+// of depending on a CDN request (cdnjs) that can silently fail on some networks
+// and leave the chart box empty with no visible error.
+function loadChartJsInline() {
+  try {
+    const chartJsPath = path.join(__dirname, "node_modules", "chart.js", "dist", "chart.umd.js");
+    return `<script>\n${fs.readFileSync(chartJsPath, "utf-8")}\n</script>`;
+  } catch (err) {
+    console.warn(`  ⚠ Could not load local Chart.js bundle (${err.message}), falling back to CDN (requires internet).`);
+    return `<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>`;
+  }
+}
+
 function buildHtmlReport(results, meta, config) {
   const isFullMode = config.auditMode === "full";
 
@@ -390,7 +414,7 @@ function buildHtmlReport(results, meta, config) {
 <head>
 <meta charset="UTF-8">
 <title>luxbaz.com ${reportTitle}</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+${loadChartJsInline()}
 <style>
   body { font-family: Tahoma, Arial, sans-serif; background:#f5f6f8; margin:0; padding:24px; color:#222; }
   h1 { font-size: 22px; }
@@ -469,6 +493,10 @@ async function main() {
   const args = process.argv.slice(2);
   const singleUrlIdx = args.indexOf("--url");
   const singleUrl = singleUrlIdx !== -1 && args[singleUrlIdx + 1] ? args[singleUrlIdx + 1] : null;
+  const auditModeIdx = args.indexOf("--audit");
+  const cliAuditMode = auditModeIdx !== -1 && args[auditModeIdx + 1] ? args[auditModeIdx + 1] : null;
+  const formFactorIdx = args.indexOf("--device");
+  const cliFormFactor = formFactorIdx !== -1 && args[formFactorIdx + 1] ? args[formFactorIdx + 1] : null;
 
   console.log("Loading Lighthouse modules...");
   try {
@@ -479,17 +507,47 @@ async function main() {
     process.exit(1);
   }
 
-  const config = loadConfig();
+  let config = loadConfig();
+
+  // CLI overrides for config
+  if (cliAuditMode) config.auditMode = cliAuditMode;
+  if (cliFormFactor) config.formFactor = cliFormFactor;
 
   if (singleUrl) {
     console.log(`\n== Single URL mode: ${singleUrl} ==`);
+    if (cliAuditMode) console.log(`  Audit mode: ${cliAuditMode}`);
+    if (cliFormFactor) console.log(`  Device: ${cliFormFactor}`);
     const chrome = await chromeLauncher.launch({
       chromeFlags: ["--headless=new", "--no-sandbox", "--disable-gpu"],
     });
-    const result = await runLighthouseOnUrl(singleUrl, config, chrome);
-    console.log(`  ✓ Score: ${result.score}`);
-    try { await chrome.kill(); } catch (e) { /* ignore */ }
-    console.log(JSON.stringify(result, null, 2));
+
+    let result;
+    try {
+      result = await runLighthouseOnUrl(singleUrl, config, chrome);
+      console.log(`  ✓ Score: ${result.score}`);
+    } finally {
+      try { await chrome.kill(); } catch (e) { /* ignore */ }
+    }
+
+    // Wrap the single result in the same results[]/meta[] shape buildHtmlReport()
+    // expects for a full-site run, so single-page mode gets the same report.
+    const results = [result];
+    const meta = [{ url: singleUrl, category: "single-page", totalInCategory: 1 }];
+
+    console.log("\n== Building report ==");
+    const outputDir = path.join(__dirname, config.outputDir || "./reports");
+    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const jsonPath = path.join(outputDir, `raw-single-${timestamp}.json`);
+    const htmlPath = path.join(outputDir, `report-single-${timestamp}.html`);
+
+    fs.writeFileSync(jsonPath, JSON.stringify({ meta, results }, null, 2), "utf-8");
+    fs.writeFileSync(htmlPath, buildHtmlReport(results, meta, config), "utf-8");
+
+    console.log(`\n✅ Done!`);
+    console.log(`HTML report: ${htmlPath}`);
+    console.log(`Raw JSON data: ${jsonPath}`);
     return;
   }
 

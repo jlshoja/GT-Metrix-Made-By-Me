@@ -8,7 +8,8 @@
     "audit": "node seo-speed-audit.js"
   },
   "dependencies": {
-    "lighthouse": "^12.2.1",
-    "chrome-launcher": "^1.1.2"
+    "chart.js": "^4.4.4",
+    "chrome-launcher": "^1.1.2",
+    "lighthouse": "^12.2.1"
   }
 }
